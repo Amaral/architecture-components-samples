@@ -23,7 +23,12 @@ import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.*
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.asFlow
+import androidx.lifecycle.lifecycleScope
+import androidx.paging.LoadState
+import androidx.paging.LoadType
 import androidx.paging.PagingData
 import com.android.example.paging.pagingwithnetwork.GlideApp
 import com.android.example.paging.pagingwithnetwork.R
@@ -51,6 +56,8 @@ class RedditActivity : AppCompatActivity() {
         }
     }
 
+    private var refreshListener: ((LoadType, LoadState) -> Unit)? = null
+
     private val model: SubRedditViewModel by viewModels {
         object : ViewModelProvider.Factory {
             override fun <T : ViewModel?> create(modelClass: Class<T>): T {
@@ -74,6 +81,12 @@ class RedditActivity : AppCompatActivity() {
         model.showSubreddit(subreddit)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        refreshListener?.let { (list.adapter as? PostsAdapter)?.removeLoadStateListener(it) }
+        refreshListener = null
+    }
+
     private fun initAdapter() {
         val glide = GlideApp.with(this)
         val adapter = PostsAdapter(glide)
@@ -84,15 +97,25 @@ class RedditActivity : AppCompatActivity() {
             }
         }
 
-        model.networkState.observe(this, Observer {
-            adapter.setNetworkState(it)
-        })
+        refreshListener = { loadType: LoadType, loadState: LoadState ->
+            when (loadType) {
+                LoadType.REFRESH -> swipe_refresh.isRefreshing = loadState == LoadState.Loading
+                else -> {
+                    val networkState = when (loadState) {
+                        LoadState.Idle -> NetworkState.LOADED
+                        LoadState.Loading -> NetworkState.LOADING
+                        LoadState.Done -> NetworkState.LOADED
+                        is LoadState.Error -> NetworkState.error(loadState.error.message)
+                    }
+                    adapter.setNetworkState(networkState)
+                }
+            }
+        }.also { refreshListener ->
+            (list.adapter as? PostsAdapter)?.addLoadStateListener(refreshListener)
+        }
     }
 
     private fun initSwipeToRefresh() {
-        model.refreshState.observe(this, Observer {
-            swipe_refresh.isRefreshing = it == NetworkState.LOADING
-        })
         swipe_refresh.setOnRefreshListener {
             (list.adapter as? PostsAdapter)?.refresh()
         }
